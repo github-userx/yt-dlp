@@ -1,0 +1,173 @@
+# coding: utf-8
+from __future__ import unicode_literals
+
+import itertools
+import re
+from .common import InfoExtractor
+from ..utils import (
+    determine_ext,
+    ExtractorError,
+    parse_resolution,
+    url_or_none,
+)
+
+
+class MrDeepfakesIE(InfoExtractor):
+    _VALID_URL = r'https?://(?:www\.)?mrdeepfakes\.com/video/(?P<id>[0-9]+)/.+'
+    _TEST = {
+        'url': 'https://mrdeepfakes.com/video/5/selena-gomez-pov-deep-fakes',
+        'md5': 'fec4ad5ec150f655e0c74c696a4a2ff4',
+        'info_dict': {
+            'id': '5',
+            'ext': 'mp4',
+            'title': 'Selena Gomez POV (Deep Fakes)',
+            'description': 'Deepfake Selena Gomez lets you fuck her tight shaved pussy',
+            'height': 720,
+            'age_limit': 18
+        }
+    }
+
+
+
+    def _flashvars_get_format(self, flashvars, key, fatal=True):
+        """Returns tuple of format (url, quality) for format with URL key 'key', or (None, None) if it doesn't exist."""
+        url = flashvars.get(key)
+        if url is None:
+            if fatal:
+                raise ExtractorError('Unable to extract flashvars ' + key)
+            return (None, None)
+        url = url.split('/', 2)[-1]
+        quality = parse_resolution(flashvars.get(key + '_text') or url).get('height')
+
+        return (url, quality)
+
+    def _license_code_decrypt(self, license_code, license_code_length=16):
+        """Decrypts license code from form in flashvars to form usable by _uuid_decrypt."""
+        if license_code != '':
+            f = ''
+
+            for char in license_code[1:]:
+                if char == '0':
+                    f += '1'
+                else:
+                    f += char
+
+            j = len(f) // 2
+            k = int(f[:j + 1])
+            l = int(f[j:])
+            g = abs(l - k)
+            f = g
+            g = abs(k - l)
+            f += g
+            f *= 2
+            f = str(f)
+            i = license_code_length // 2 + 2
+            m = ''
+
+            for g in range(j + 1):
+                for h in range(1, 5):
+                    n = int(license_code[g + h]) + int(f[g])
+                    if n >= i:
+                        n -= i
+                    m += str(n)
+            return m
+
+        return license_code
+
+    def _uuid_decrypt(self, uuid, license_code):
+        """Decrypts the uuid section of a file URL, using a decrypted license code."""
+        h = uuid[:32]
+
+        j = h
+
+        for k in range(len(h) - 1, -1, -1):
+            l = k
+            for m in range(k, len(license_code)):
+                l += int(license_code[m])
+            while(l >= len(h)):
+                l -= len(h)
+            n = ''
+            for o in range(len(h)):
+                if o == k:
+                    n += str(h[l])
+                else:
+                    if o == l:
+                        n += str(h[k])
+                    else:
+                        n += str(h[o])
+            h = n
+        uuid = uuid.replace(j, h)
+        return uuid
+
+    def _real_extract(self, url):
+        video_id = self._match_id(url)
+        webpage = self._download_webpage(url, video_id)
+        title = self._og_search_title(webpage)
+     flashvars = self._search_regex(r'(?s)\bvar\s+flashvars\s*=\s*\({'.+?})\s*(?:;|<script)', webpage, 'flashvars')
+     flashvars = self._parse_json(flashvars, video_id) or {}
+     license_code = flashvars.get('license_code')
+        if license_code is None:
+            # Support for accounts is as yet absent
+            self.raise_login_required()
+
+        license_code = self._license_code_decrypt(license_code)
+
+        encrypted_formats = []
+                encrypted_formats.append(self._flashvars_get_format(flashvars, 'video_url'))
+
+        for ix in itertools.count(1):
+            key = 'video_alt_url'
+            if ix > 1:
+                key += '%d' % (ix, )
+            format = self._flashvars_get_format(flashvars, key, fatal=False)
+
+            if None not in format:
+                encrypted_formats.append(format)
+            else:
+                break
+                
+
+        decrypted_formats = []
+
+        for url, quality in encrypted_formats:
+            url_split = url.split('/')
+
+            for ix, chunk in enumerate(url_split):
+                if len(chunk) == 42:
+                    chosen = ix
+                    break
+            else:
+                continue
+
+            url_split[chosen] = self._uuid_decrypt(url_split[chosen], license_code)
+            decrypted_url = '/'.join(url_split)
+            decrypted_formats.append((decrypted_url, quality))
+
+        # Sort by quality
+        decrypted_formats.sort(key=lambda x: x[1])
+
+        formats = []
+
+        for url, quality in decrypted_formats:
+            formats.append({
+                'url': url,
+                'height': quality,
+                'ext': determine_ext(url, 'mp4'),
+
+                'http_headers': {
+                    'Referer': 'https://mrdeepfakes.com/'
+                }
+            })
+            
+        self._sort_formats(formats)
+        
+        return {
+            'id': video_id,
+            'title': title,
+            'description': self._og_search_description(webpage),
+            'thumbnail': url_or_none(flashvars.get('preview_url')) or self._og_search_thumbnail(webpage),
+            'categories': filter(None, re.split(r'\s*,\s*', flashvars.get('video_categories', ''))),
+            'tags': filter(None, re.split(r'\s*,\s*', flashvars.get('video_tags', ''))),
+            'age_limit': 18,
+            'formats': formats,
+        }
