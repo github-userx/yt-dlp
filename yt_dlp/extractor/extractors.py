@@ -944,6 +944,7 @@ from .movieclips import MovieClipsIE
 from .moviepilot import MoviepilotIE
 from .moviezine import MoviezineIE
 from .movingimage import MovingImageIE
+from .mrdeepfakes import MrDeepfakesIE
 from .msn import MSNIE
 from .mtv import (
     MTVIE,
